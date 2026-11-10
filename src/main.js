@@ -9,7 +9,7 @@ import {
   KITS, Progress, THEMES, TROPHIES, requirementText,
 } from './progress.js';
 import {
-  H, THEMES_BY_ID, W, drawBall, drawCourt, drawLanding, drawPlayer,
+  THEMES_BY_ID, VIEW, W, drawBall, drawCourt, drawLanding, drawPlayer, fillView, setViewAspect,
 } from './render.js';
 import {
   LOCK, STAR, STAR_SMALL, TROPHY, drawSprite, drawText,
@@ -32,8 +32,6 @@ const SHOT_BUTTONS = [
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
-canvas.width = W;
-canvas.height = H;
 
 export const progress = new Progress(undefined, { unlockAll: UNLOCK_ALL });
 setMuted(progress.data.muted);
@@ -177,8 +175,7 @@ function button(x, y, w, h, label, onPress, { primary = false } = {}) {
 }
 
 function dim() {
-  ctx.fillStyle = 'rgba(0,0,0,0.72)';
-  ctx.fillRect(0, 0, W, H);
+  fillView(ctx, 'rgba(0,0,0,0.72)');
 }
 
 function drawHud(match) {
@@ -225,8 +222,7 @@ function drawControls(match) {
 
 function drawTieBreak(match) {
   const t = theme();
-  ctx.fillStyle = 'rgba(0,0,0,0.85)';
-  ctx.fillRect(0, 0, W, H);
+  fillView(ctx, 'rgba(0,0,0,0.85)');
   drawText(ctx, `${match.score[YOU]}-${match.score[BOT]}`, 90, 100, t.accent, { scale: 5, align: 'center' });
   drawText(ctx, 'WIN BY 2', 90, 160, t.text, { scale: 3, align: 'center' });
   drawText(ctx, 'CLEAR POINTS', 90, 192, t.text, { scale: 2, align: 'center' });
@@ -254,7 +250,7 @@ function drawGame() {
   } else if (state.banner) {
     const color = state.banner.won ? t.accent : t.text;
     ctx.fillStyle = 'rgba(0,0,0,0.65)';
-    ctx.fillRect(0, 118, W, 34);
+    ctx.fillRect(-VIEW.ox, 118, VIEW.w, 34);
     drawText(ctx, state.banner.detail, 90, 124, color, { align: 'center' });
     drawText(ctx, state.banner.text, 90, 138, t.text, { align: 'center' });
   } else if (match.phase === 'serve' && match.server === BOT) {
@@ -265,8 +261,7 @@ function drawGame() {
 function drawTitle() {
   const t = theme();
   drawCourt(ctx, t);
-  ctx.fillStyle = 'rgba(0,0,0,0.4)';
-  ctx.fillRect(0, 0, W, H);
+  fillView(ctx, 'rgba(0,0,0,0.4)');
   drawText(ctx, 'RALLY', 90, 40, t.accent, { scale: 4, align: 'center', shadow: t.bg });
   drawText(ctx, 'RUSH', 90, 76, t.text, { scale: 4, align: 'center', shadow: t.bg });
   const swinging = Math.floor(state.clock * 1.5) % 2 === 0 ? 0.1 : 0;
@@ -436,8 +431,10 @@ const SCREENS = {
 
 function draw() {
   buttons = [];
-  SCREENS[state.screen]();
   const { bg } = theme();
+  ctx.setTransform(1, 0, 0, 1, VIEW.ox, VIEW.oy);
+  fillView(ctx, bg);
+  SCREENS[state.screen]();
   if (document.body.dataset.bg !== bg) {
     document.body.dataset.bg = bg;
     document.body.style.background = bg;
@@ -510,8 +507,8 @@ function tap(x, y) {
 function toLogical(e) {
   const rect = canvas.getBoundingClientRect();
   return {
-    x: ((e.clientX - rect.left) / rect.width) * W,
-    y: ((e.clientY - rect.top) / rect.height) * H,
+    x: ((e.clientX - rect.left) / rect.width) * VIEW.w - VIEW.ox,
+    y: ((e.clientY - rect.top) / rect.height) * VIEW.h - VIEW.oy,
   };
 }
 
@@ -527,13 +524,16 @@ bindInput(canvas, toLogical, {
   escape: pause,
 });
 
-// Use whole device pixels so the art stays sharp on any iPhone.
+// Fill the whole screen on any device: the canvas takes the screen's shape and
+// the game layout stays centred inside it.
 function resize() {
   const stage = canvas.parentElement.getBoundingClientRect();
-  const ratio = devicePixelRatio || 1;
-  const scale = Math.max(1, Math.floor(Math.min((stage.width * ratio) / W, (stage.height * ratio) / H)));
-  canvas.style.width = `${(W * scale) / ratio}px`;
-  canvas.style.height = `${(H * scale) / ratio}px`;
+  if (!stage.width || !stage.height) return;
+  setViewAspect(stage.height / stage.width);
+  canvas.width = VIEW.w;
+  canvas.height = VIEW.h;
+  canvas.style.width = `${stage.width}px`;
+  canvas.style.height = `${stage.height}px`;
 }
 
 addEventListener('resize', resize);

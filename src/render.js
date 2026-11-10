@@ -6,8 +6,27 @@ import {
   HAND, PLAYER_FRAMES, PLAYER_SIZE, drawSprite,
 } from './sprites.js';
 
+// The layout is designed for W x H. The canvas grows past that to match the
+// screen's shape, with the design area centred inside it.
 export const W = 180;
 export const H = 360;
+export const VIEW = { w: W, h: H, ox: 0, oy: 0 };
+
+// Fit the canvas to a screen of the given shape. Returns true if it changed.
+export function setViewAspect(aspect) {
+  const w = aspect >= H / W ? W : Math.round(H / aspect);
+  const h = aspect >= H / W ? Math.round(W * aspect) : H;
+  if (w === VIEW.w && h === VIEW.h) return false;
+  Object.assign(VIEW, { w, h, ox: Math.floor((w - W) / 2), oy: Math.floor((h - H) / 2) });
+  courtCache.clear();
+  return true;
+}
+
+// Fill the whole canvas, including the space around the design area.
+export function fillView(ctx, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(-VIEW.ox, -VIEW.oy, VIEW.w, VIEW.h);
+}
 
 const CAMERA = { y: 17, z: 12 };
 const FOCAL = 190;
@@ -81,14 +100,38 @@ function floorLine(ctx, x1, y1, x2, y2, color) {
   line(ctx, project(x1, y1), project(x2, y2), color);
 }
 
+// Follow the line through a and b out to the screen edge at x, stopping at maxY.
+function toEdge(a, b, x, maxY) {
+  const t = (x - a.x) / (b.x - a.x);
+  const y = a.y + (b.y - a.y) * t;
+  if (y <= maxY) return { x, y };
+  const s = (maxY - a.y) / (b.y - a.y);
+  return { x: a.x + (b.x - a.x) * s, y: maxY };
+}
+
+// On screens wider than the layout, carry a side wall and its red line out to the edge.
+function extendSideWall(ctx, theme, wallX, edgeX) {
+  const { length, frontLine, backLine } = COURT;
+  const backY = project(wallX, length).y;
+  const frontTop = project(wallX, 0, WALL_TOP);
+  const top = toEdge(frontTop, project(wallX, length, WALL_TOP), edgeX, backY);
+  polygon(ctx, [frontTop, top, { x: edgeX, y: backY }, project(wallX, length), project(wallX, 0)], theme.side);
+  const redStart = project(wallX, 0, frontLine);
+  line(ctx, redStart, toEdge(redStart, project(wallX, length, backLine), edgeX, backY), theme.line);
+}
+
 function paintCourt(ctx, theme) {
   const { width, length, frontLine, backLine, service, tin, shortLine, box } = COURT;
-  ctx.fillStyle = theme.bg;
-  ctx.fillRect(0, 0, W, H);
+  ctx.translate(VIEW.ox, VIEW.oy);
+  fillView(ctx, theme.bg);
 
   // Side walls run from the front corners out to the bottom of the screen.
   polygon(ctx, [project(0, 0, WALL_TOP), project(0, length, WALL_TOP), project(0, length, 0), project(0, 0, 0)], theme.side);
   polygon(ctx, [project(width, 0, WALL_TOP), project(width, length, WALL_TOP), project(width, length, 0), project(width, 0, 0)], theme.side);
+  if (VIEW.ox > 0) {
+    extendSideWall(ctx, theme, 0, -VIEW.ox);
+    extendSideWall(ctx, theme, width, W + VIEW.ox);
+  }
   polygon(ctx, [project(0, 0, WALL_TOP), project(width, 0, WALL_TOP), project(width, 0, 0), project(0, 0, 0)], theme.front);
 
   // Floor boards, narrowing toward the front wall.
@@ -118,11 +161,11 @@ function paintCourt(ctx, theme) {
   const backLeft = project(0, length);
   const backRight = project(width, length);
   ctx.fillStyle = theme.shade;
-  ctx.fillRect(0, Math.round(backLeft.y), W, 4);
+  ctx.fillRect(-VIEW.ox, Math.round(backLeft.y), VIEW.w, 4);
   ctx.fillStyle = theme.side;
   ctx.fillRect(Math.round(backLeft.x), Math.round(backLeft.y), Math.round(backRight.x - backLeft.x), 1);
   ctx.fillStyle = theme.bg;
-  ctx.fillRect(0, Math.round(backLeft.y) + 4, W, H);
+  ctx.fillRect(-VIEW.ox, Math.round(backLeft.y) + 4, VIEW.w, VIEW.h);
 }
 
 const courtCache = new Map();
@@ -130,12 +173,12 @@ const courtCache = new Map();
 export function drawCourt(ctx, theme) {
   if (!courtCache.has(theme)) {
     const canvas = document.createElement('canvas');
-    canvas.width = W;
-    canvas.height = H;
+    canvas.width = VIEW.w;
+    canvas.height = VIEW.h;
     paintCourt(canvas.getContext('2d'), theme);
     courtCache.set(theme, canvas);
   }
-  ctx.drawImage(courtCache.get(theme), 0, 0);
+  ctx.drawImage(courtCache.get(theme), -VIEW.ox, -VIEW.oy);
 }
 
 const spriteCache = new Map();
