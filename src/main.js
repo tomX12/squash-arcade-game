@@ -20,6 +20,8 @@ import { bindInput, keys } from './input.js';
 // Opens every opponent, kit, court and trophy. Set to false to earn them through play.
 const UNLOCK_ALL = true;
 const TRAIL_LENGTH = 7;
+// The floor marker of a player standing in the other's way flashes this colour.
+const BLOCKING_COLOR = '#ff3b3b';
 const STAR_DELAY = 0.35;
 const STICK_RADIUS = 16;
 const AIM_THRESHOLD = 0.35;
@@ -110,6 +112,10 @@ function handleEvents(match) {
         state.banner = { text: won ? 'YOUR POINT' : `${match.opponent.name}'S POINT`, detail: event.reason, won };
         break;
       }
+      case 'let':
+        sfx.serve();
+        state.banner = { text: 'REPLAY POINT', detail: 'LET', won: false };
+        break;
       case 'over': finishMatch(); break;
       default:
     }
@@ -237,15 +243,17 @@ function drawGame() {
   }
 
   // Far things first, so nearer ones overlap them.
-  const you = { y: match.players[YOU].y, draw: () => drawPlayer(ctx, match.players[YOU], yourKit(), t.accent) };
-  const bot = { y: match.players[BOT].y, draw: () => drawPlayer(ctx, match.players[BOT], match.opponent.kit) };
+  const flash = Math.sin(state.clock * 20) > 0 ? BLOCKING_COLOR : undefined;
+  const marker = (i, normal) => (match.blocking === i ? flash ?? normal : normal);
+  const you = { y: match.players[YOU].y, draw: () => drawPlayer(ctx, match.players[YOU], yourKit(), marker(YOU, t.accent)) };
+  const bot = { y: match.players[BOT].y, draw: () => drawPlayer(ctx, match.players[BOT], match.opponent.kit, marker(BOT)) };
   const ball = { y: match.ball.y, draw: () => drawBall(ctx, match.ball, state.trail, t.ball) };
   [you, bot, ball].sort((a, b) => a.y - b.y).forEach((item) => item.draw());
 
   drawHud(match);
   drawControls(match);
 
-  if (match.phase === 'point' && isTieBreak(match)) {
+  if (match.phase === 'point' && match.winner !== null && isTieBreak(match)) {
     drawTieBreak(match);
   } else if (state.banner) {
     const color = state.banner.won ? t.accent : t.text;

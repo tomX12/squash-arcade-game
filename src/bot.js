@@ -2,10 +2,12 @@
 // `reaction`, `speed` and `skill` decide how well it gets there.
 
 import {
-  COURT, T_SPOT, canHit, serve, swing,
+  COURT, T_SPOT, canHit, inTheWay, serve, swing,
 } from './physics.js';
 
 const ARRIVED = 0.12;
+// Start moving out of the rival's way this far from them, before the referee would call it.
+const CLEAR_EARLY = 2;
 
 export function createBrain() {
   return { plan: null, lastRally: -1, delay: 0 };
@@ -31,6 +33,17 @@ function chooseShot(match, i) {
 function heightError(match, skill) {
   if (match.random() < skill) return 0;
   return -0.6 - match.random() * 0.9;
+}
+
+// Step sideways out of the rival's line to the ball, away from a nearby side wall.
+function clearTarget(player, way) {
+  let { x, y } = way.clear;
+  const out = player.x + x;
+  if (out < 0.5 || out > COURT.width - 0.5) {
+    x = -x;
+    y = -y;
+  }
+  return { x: player.x + x, y: player.y + y };
 }
 
 function walkTo(player, target) {
@@ -67,7 +80,8 @@ export function updateBot(match, i, brain, dt, profile = match.opponent) {
   if (match.toHit !== i) {
     brain.plan = null;
     brain.lastRally = -1;
-    walkTo(player, T_SPOT);
+    const way = inTheWay(match, CLEAR_EARLY);
+    walkTo(player, way ? clearTarget(player, way) : T_SPOT);
     return;
   }
 

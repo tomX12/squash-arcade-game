@@ -35,6 +35,17 @@ const SWING_COOLDOWN = 0.38;
 const POINT_PAUSE = 1.5;
 const TIE_BREAK_PAUSE = 3;
 const MIN_PLAYER_GAP = 0.6;
+// Interference: the player who has just hit is in the way when they stand within
+// BLOCK_DISTANCE of the other player and inside BLOCK_CONE of that player's line to the ball.
+const BLOCK_DISTANCE = 1;
+const BLOCK_CONE = (30 * Math.PI) / 180;
+// How long the blocked player must be held up before the referee calls it.
+const BLOCK_TIME = 0.2;
+// Time a player gets to clear after hitting before standing in the way costs a stroke.
+const CLEAR_TIME = 0.45;
+// A player gets this many lets a game. After that, interference from an opponent who is
+// clearing means play on, so running into people stops paying; not clearing is still a stroke.
+const LETS_PER_GAME = 2;
 // `spread` allows for sideways drift off the front wall: the longer the ball hangs after it, the more it needs.
 // `carry` is the most extra pace a cleanly struck shot can pick up, so some go deep and others die short.
 const SHOTS = {
@@ -50,7 +61,7 @@ export const BOT = 1;
 function makePlayer() {
   return {
     x: 0, y: 0, mx: 0, my: 0, aim: 0, run: 0, anim: 0, facing: 1,
-    window: 0, cooldown: 0, shot: null, heightError: 0,
+    window: 0, cooldown: 0, shot: null, heightError: 0, struckAt: -10,
   };
 }
 
@@ -76,6 +87,11 @@ export function createMatch(opponent, random = Math.random) {
     landing: null,
     path: [],
     events: [],
+    lets: [0, 0],
+    blocking: null,
+    blockTime: 0,
+    pending: null,
+    shotAt: 0,
   };
   setupServe(match);
   return match;
@@ -90,6 +106,7 @@ function setupServe(match) {
   for (const player of match.players) Object.assign(player, { window: 0, cooldown: 0, anim: 0, mx: 0, my: 0 });
   Object.assign(match, {
     phase: 'serve', toHit: match.server, frontHit: true, bounces: 0, rally: 0, timer: 1, landing: null, path: [],
+    blocking: null, blockTime: 0, pending: null,
   });
   holdBall(match);
 }
@@ -158,6 +175,10 @@ function strike(match, i, shotName, landX, heightError = 0) {
   const player = match.players[i];
   player.anim = SWING_ANIM;
   player.window = 0;
+  player.struckAt = match.time;
+  match.shotAt = match.time;
+  // Playing the ball despite interference means no call.
+  match.pending = null;
   player.facing = ball.x >= player.x ? 1 : -1;
   Object.assign(match, { striker: i, toHit: 1 - i, frontHit: false, bounces: 0 });
   match.rally += 1;
@@ -192,6 +213,11 @@ export function isTieBreak(match) {
 function endRally(match, winner, reason) {
   if (match.predicting) {
     match.phase = 'ended';
+    return;
+  }
+  // A call waiting on the shot that never came is made now instead.
+  if (match.pending) {
+    makeCall(match);
     return;
   }
   Object.assign(match, {
@@ -309,7 +335,103 @@ function updateSwing(match, i) {
   strike(match, i, player.shot, landX, player.heightError - miss);
 }
 
+function speedOf(match, i) {
+  return i === YOU ? PLAYER_SPEED : match.opponent.speed;
+}
+
+// Where player i would naturally take the ball: the first point at a comfortable height after
+// it bounces that they can get to in time, or failing that the first point they can reach at all.
+// Path times count from the shot, so `at` is when the ball gets there.
+export function hitPoint(match, i) {
+  const player = match.players[i];
+  const struck = match.shotAt;
+  const elapsed = match.time - struck;
+  const speed = speedOf(match, i);
+  const inTime = match.path.filter((p) => p.z < HIT_HEIGHT && p.t > elapsed
+    && Math.max(0, Math.hypot(p.x - player.x, p.y - player.y) - REACH) / speed <= p.t - elapsed);
+  const point = inTime.find((p) => p.bounces >= 1 && p.z < 1.6) ?? inTime[0];
+  return point ? { ...point, at: struck + point.t } : null;
+}
+
+const unit = (x, y) => {
+  const length = Math.hypot(x, y);
+  return length > 0 ? { x: x / length, y: y / length, length } : { x: 0, y: 0, length: 0 };
+};
+
+// Is the player who has just hit standing in the other player's way to the ball?
+// Returns which way they should move to get out of it, or null. A larger `distance`
+// lets a player see they are about to be in the way.
+export function inTheWay(match, distance = BLOCK_DISTANCE) {
+  if (match.phase !== 'rally') return null;
+  const blocked = match.players[match.toHit];
+  const blocker = match.players[1 - match.toHit];
+  const target = hitPoint(match, match.toHit);
+  if (!target) return null;
+  const toBall = unit(target.x - blocked.x, target.y - blocked.y);
+  const toBlocker = unit(blocker.x - blocked.x, blocker.y - blocked.y);
+  if (toBlocker.length > distance || toBlocker.length > toBall.length) return null;
+  const cos = toBall.x * toBlocker.x + toBall.y * toBlocker.y;
+  if (cos < Math.cos(BLOCK_CONE)) return null;
+  // Out to whichever side of the line the blocker is already on.
+  const side = toBall.x * toBlocker.y - toBall.y * toBlocker.x >= 0 ? 1 : -1;
+  return {
+    target, toBall, toBlocker, clear: { x: -toBall.y * side, y: toBall.x * side },
+  };
+}
+
+function makeCall(match) {
+  const { call, player } = match.pending;
+  match.pending = null;
+  match.blocking = null;
+  if (call === 'stroke') {
+    endRally(match, player, 'STROKE');
+    return;
+  }
+  match.lets[player] += 1;
+  Object.assign(match, {
+    phase: 'point', winner: null, reason: 'LET', landing: null, path: [], timer: POINT_PAUSE,
+  });
+  match.events.push({ type: 'let' });
+}
+
+// An automatic referee. A call needs the blocked player to be heading for a ball they could
+// still reach, so running into the other player to fish for a let gets nothing. It decides
+// when the interference happens, but only calls it when the shot would have been played.
+function referee(match) {
+  const way = inTheWay(match);
+  match.blocking = way ? 1 - match.toHit : null;
+  if (match.pending) {
+    if (match.time >= match.pending.at) makeCall(match);
+    return;
+  }
+  const blocked = match.players[match.toHit];
+  const heading = unit(blocked.mx, blocked.my);
+  if (!way || heading.length < 0.3 || heading.x * way.toBall.x + heading.y * way.toBall.y < 0.5) {
+    match.blockTime = 0;
+    return;
+  }
+  match.blockTime += STEP;
+  if (match.blockTime < BLOCK_TIME) return;
+
+  const b = match.blocking;
+  const blocker = match.players[b];
+  const moving = unit(blocker.mx, blocker.my);
+  // Stepping off the line either way, or backing away, counts as trying to clear.
+  const clearing = moving.length > 0.3 && (Math.abs(moving.x * way.clear.x + moving.y * way.clear.y) > 0.4
+    || moving.x * way.toBlocker.x + moving.y * way.toBlocker.y > 0.4);
+  const justHit = match.time - blocker.struckAt < CLEAR_TIME;
+  let call = null;
+  if (!justHit && !clearing) call = 'stroke';
+  else if (match.lets[match.toHit] < LETS_PER_GAME) call = 'let';
+  if (call) match.pending = { call, player: match.toHit, at: way.target.at };
+}
+
 function nextPoint(match) {
+  // A let replays the point: same server, same side.
+  if (match.winner === null) {
+    setupServe(match);
+    return;
+  }
   const [you, bot] = match.score;
   if (Math.max(you, bot) >= WIN_SCORE && Math.abs(you - bot) >= WIN_MARGIN) {
     match.phase = 'over';
@@ -334,17 +456,19 @@ export function step(match) {
   }
   if (match.phase === 'serve') {
     const receiver = 1 - match.server;
-    movePlayer(match, receiver, receiver === YOU ? PLAYER_SPEED : match.opponent.speed);
+    movePlayer(match, receiver, speedOf(match, receiver));
     keepInCourt(match.players[receiver]);
     holdBall(match);
     return;
   }
   if (match.phase !== 'rally') return;
 
-  movePlayer(match, YOU, PLAYER_SPEED);
-  movePlayer(match, BOT, match.opponent.speed);
+  movePlayer(match, YOU, speedOf(match, YOU));
+  movePlayer(match, BOT, speedOf(match, BOT));
   separatePlayers(match);
   match.players.forEach(keepInCourt);
+  referee(match);
+  if (match.phase !== 'rally') return;
   updateSwing(match, YOU);
   updateSwing(match, BOT);
   stepBall(match);

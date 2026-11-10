@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  BOT, COURT, STEP, WIN_SCORE, YOU, createMatch, isTieBreak, predict, serve, starsFor, step, swing,
+  BOT, COURT, STEP, WIN_SCORE, YOU, createMatch, isTieBreak, hitPoint, predict, serve, starsFor, step, swing,
 } from '../src/physics.js';
 import { createBrain, updateBot } from '../src/bot.js';
 import { OPPONENTS } from '../src/levels.js';
@@ -370,4 +370,119 @@ test('progress still works without storage or with a corrupt save', () => {
   const progress = new Progress(corrupt);
   progress.recordClear(0, 1, 10);
   assert.equal(progress.stars(0), 1);
+});
+
+// You serve, then stand between the bot and the ball it is running for.
+function blockTheBot({
+  sinceHit = 1, blockerMoves = false, letsUsed = 0, steps = 600, ballGone = false,
+} = {}) {
+  const match = createMatch(OPPONENTS[0], () => 0);
+  serve(match);
+  match.lets[BOT] = letsUsed;
+  const bot = match.players[BOT];
+  // A few metres from where the serve lands, so there is room to be in the way.
+  Object.assign(bot, { x: 3.2, y: 4.5 });
+  const target = hitPoint(match, BOT);
+  const distance = Math.hypot(target.x - bot.x, target.y - bot.y);
+  const toBall = { x: (target.x - bot.x) / distance, y: (target.y - bot.y) / distance };
+  Object.assign(bot, { mx: toBall.x, my: toBall.y });
+  Object.assign(match.players[YOU], {
+    x: bot.x + toBall.x * 0.7,
+    y: bot.y + toBall.y * 0.7,
+    // Backing away down the same line still counts as trying to clear.
+    mx: blockerMoves ? toBall.x * 0.5 : 0,
+    my: blockerMoves ? toBall.y * 0.5 : 0,
+    struckAt: match.time - sinceHit,
+  });
+  if (ballGone) match.path = [];
+  for (let i = 0; i < steps && match.phase === 'rally'; i++) step(match);
+  return match;
+}
+
+test('standing in the way long after your shot gives the other player a stroke', () => {
+  const match = blockTheBot();
+  assert.equal(match.reason, 'STROKE');
+  assert.equal(match.winner, BOT);
+  assert.deepEqual(match.score, [0, 1]);
+});
+
+test('getting in the way just after your shot is a let, and the point is replayed', () => {
+  const match = blockTheBot({ sinceHit: 0.1 });
+  assert.equal(match.reason, 'LET');
+  assert.equal(match.winner, null);
+  assert.deepEqual(match.score, [0, 0]);
+  for (let i = 0; i < 600 && match.phase === 'point'; i++) step(match);
+  assert.equal(match.phase, 'serve');
+  assert.equal(match.server, YOU);
+  assert.equal(match.side, 'right');
+});
+
+test('a player moving out of the way gives a let, not a stroke', () => {
+  const match = blockTheBot({ blockerMoves: true });
+  assert.equal(match.reason, 'LET');
+});
+
+test('nothing is called when the blocked player could not reach the ball anyway', () => {
+  const match = blockTheBot({ ballGone: true, steps: 60 });
+  assert.equal(match.phase, 'rally');
+  assert.equal(match.pending, null);
+});
+
+test('the call waits until the blocked player would have played the shot', () => {
+  const match = blockTheBot({ steps: Math.ceil(0.3 / STEP) });
+  assert.equal(match.phase, 'rally');
+  assert.equal(match.pending?.call, 'stroke');
+  const shotTime = match.pending.at;
+  for (let i = 0; i < 600 && match.phase === 'rally'; i++) step(match);
+  assert.equal(match.reason, 'STROKE');
+  assert.ok(match.time >= shotTime - STEP * 2, `called at ${match.time}, shot due at ${shotTime}`);
+});
+
+test('playing the ball anyway cancels the call', () => {
+  const match = blockTheBot({ steps: Math.ceil(0.3 / STEP) });
+  assert.ok(match.pending);
+  const bot = match.players[BOT];
+  Object.assign(bot, { mx: 0, my: 0 });
+  // Put the bot where the ball is going and let it swing.
+  const target = match.pending;
+  for (let i = 0; i < 600 && match.phase === 'rally' && match.toHit === BOT; i++) {
+    Object.assign(bot, { x: match.ball.x, y: match.ball.y + 0.3 });
+    if (match.frontHit) swing(match, BOT, 'drive');
+    step(match);
+  }
+  assert.equal(match.toHit, YOU, 'the bot should have played the ball');
+  assert.equal(match.pending, null);
+  assert.ok(target);
+});
+
+test('a brief brush past is not called', () => {
+  const match = blockTheBot({ steps: Math.floor(0.15 / STEP) });
+  assert.equal(match.phase, 'rally');
+});
+
+test('once a player has used up their lets, play goes on, but blocking is still a stroke', () => {
+  assert.equal(blockTheBot({ sinceHit: 0.1, letsUsed: 2, steps: 30 }).phase, 'rally');
+  assert.equal(blockTheBot({ letsUsed: 2 }).reason, 'STROKE');
+});
+
+test('the bot gets out of the way, so strokes against it are rare', () => {
+  let strokes = 0;
+  let points = 0;
+  for (const level of [0, 11]) {
+    const match = createMatch(OPPONENTS[level], seededRandom(level + 3));
+    const you = createBrain();
+    const bot = createBrain();
+    for (let i = 0; i < 120 * 60 * 20 && match.phase !== 'over'; i++) {
+      updateBot(match, YOU, you, STEP, PROFILE);
+      updateBot(match, BOT, bot, STEP);
+      step(match);
+      for (const event of match.events) {
+        if (event.type === 'point') points += 1;
+        if (event.type === 'point' && event.reason === 'STROKE') strokes += 1;
+      }
+      match.events.length = 0;
+    }
+  }
+  assert.ok(points > 20);
+  assert.ok(strokes <= 1, `${strokes} strokes in ${points} points`);
 });
