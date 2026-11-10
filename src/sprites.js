@@ -160,12 +160,24 @@ const LEGS_STRIDE = [
 
 const LEGS_STRIDE_B = LEGS_STRIDE.map((row) => [...row].reverse().join(''));
 
+// While swinging, the racket arm is drawn separately so it can follow the hand.
+function withoutRacketArm(rows) {
+  return rows.map((row, r) => (r >= 3 && r <= 9 ? `${row.slice(0, 9)}${row.slice(9).replace(/1/g, '.')}` : row));
+}
+
+const READY_BODY = withoutRacketArm(BODY);
+const STROKE_BODY = withoutRacketArm(SWING_BODY);
+
 export const PLAYER_FRAMES = {
   idle: [...BODY, ...LEGS_STILL],
   runA: [...BODY, ...LEGS_STRIDE],
   runB: [...BODY, ...LEGS_STRIDE_B],
-  swing: [...SWING_BODY, ...LEGS_STRIDE],
+  readyIdle: [...READY_BODY, ...LEGS_STILL],
+  readyRunA: [...READY_BODY, ...LEGS_STRIDE],
+  readyRunB: [...READY_BODY, ...LEGS_STRIDE_B],
+  swing: [...STROKE_BODY, ...LEGS_STRIDE],
 };
 export const PLAYER_SIZE = { w: 14, h: 22 };
-// Where the hand sits in each kind of frame, in sprite pixels.
-export const HAND = { rest: { x: 10.5, y: 9.5 }, swing: { x: 11.5, y: 3.5 } };
+// Where the hand sits at rest, and the racket shoulder, in sprite pixels.
+export const HAND = { rest: { x: 10.5, y: 9.5 } };
+export const SHOULDER = { x: 9.5, y: 5 };

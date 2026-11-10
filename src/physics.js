@@ -9,7 +9,9 @@ export const STEP = 1 / 120;
 export const REACH = 1.3;
 export const HIT_HEIGHT = 2.5;
 export const PLAYER_SPEED = 4.6;
-export const SWING_ANIM = 0.22;
+export const SWING_ANIM = 0.34;
+// How long a press waits, racket raised, for the ball to come into reach.
+export const SWING_WINDOW = 0.28;
 export const T_SPOT = { x: 3.2, y: 5.9 };
 export const WIN_SCORE = 11;
 const WIN_MARGIN = 2;
@@ -19,13 +21,16 @@ const GRAVITY = 9.81;
 const DRAG = 0.0157;
 // Halfway between a cold ball, which rebounds to about 13% of its drop height, and a hot one at about 30%.
 const BOUNCE = 0.46;
+// A little livelier off the floor, so a hard drive sits up to knee height instead of skidding.
+const FLOOR_BOUNCE = 0.58;
+// The back wall gives a ball more back, so a drive comes out of the corner and can be played.
+const BACK_BOUNCE = 0.6;
 const FLOOR_SLOW = 0.8;
 const WALL_SLOW = 0.9;
 const FRONT_RISE = 0.4;
 const SPIN_KICK = 0.35;
 const AIM_PASSES = 3;
 const MIN_FLIGHT = 0.12;
-const SWING_WINDOW = 0.28;
 const SWING_COOLDOWN = 0.38;
 const POINT_PAUSE = 1.5;
 const TIE_BREAK_PAUSE = 3;
@@ -104,7 +109,7 @@ export function serve(match, shot = 'serve') {
 export function swing(match, i, shot, heightError = 0) {
   const player = match.players[i];
   if (player.cooldown > 0 || match.phase !== 'rally') return;
-  Object.assign(player, { shot, heightError, window: SWING_WINDOW, cooldown: SWING_COOLDOWN, anim: SWING_ANIM });
+  Object.assign(player, { shot, heightError, window: SWING_WINDOW, cooldown: SWING_COOLDOWN });
 }
 
 export function canHit(match, i) {
@@ -239,7 +244,7 @@ function stepBall(match) {
 
   if (hitBack) {
     if (ball.z > COURT.backLine) return wallFault();
-    ball.vy = -Math.abs(ball.vy) * BOUNCE;
+    ball.vy = -Math.abs(ball.vy) * BACK_BOUNCE;
     match.events.push({ type: 'wall' });
   }
 
@@ -247,7 +252,7 @@ function stepBall(match) {
     if (!match.frontHit) return endRally(match, 1 - match.striker, 'DOWN!');
     match.bounces += 1;
     if (match.bounces >= 2) return endRally(match, match.striker, 'DOUBLE BOUNCE');
-    ball.vz = Math.abs(ball.vz) * BOUNCE;
+    ball.vz = Math.abs(ball.vz) * FLOOR_BOUNCE;
     ball.vx *= FLOOR_SLOW;
     ball.vy *= FLOOR_SLOW;
     match.events.push({ type: 'floor' });
@@ -285,10 +290,15 @@ function separatePlayers(match) {
 
 function updateSwing(match, i) {
   const player = match.players[i];
-  player.window = Math.max(0, player.window - STEP);
   player.cooldown = Math.max(0, player.cooldown - STEP);
   player.anim = Math.max(0, player.anim - STEP);
-  if (player.window <= 0 || !canHit(match, i)) return;
+  if (player.window <= 0) return;
+  player.window = Math.max(0, player.window - STEP);
+  if (!canHit(match, i)) {
+    // Nothing came into reach, so the swing goes through empty air.
+    if (player.window <= 0) player.anim = SWING_ANIM;
+    return;
+  }
 
   const { ball } = match;
   // Stretching for the ball makes the shot riskier.

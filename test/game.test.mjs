@@ -222,6 +222,21 @@ test('a good drive reaches the back wall between its first and second bounce', (
   }
 });
 
+test('a drive comes back out of the back corner before its second bounce', () => {
+  for (const [x, y] of [[3.2, 5.9], [1, 8.5], [5.4, 8.5], [1, 5.5]]) {
+    const match = createMatch(OPPONENTS[0], () => 0);
+    serve(match);
+    Object.assign(match, { frontHit: true, toHit: YOU, striker: BOT });
+    Object.assign(match.ball, { x, y, z: 0.8 });
+    Object.assign(match.players[YOU], { x, y });
+    Object.assign(match.players[BOT], { x: 3.2, y: 1 });
+    swing(match, YOU, 'drive');
+    for (let i = 0; i < 600 && match.phase === 'rally'; i++) step(match);
+    assert.equal(match.reason, 'DOUBLE BOUNCE', `drive from ${x},${y}`);
+    assert.ok(match.ball.y < COURT.length - 1, `drive from ${x},${y} died at y ${match.ball.y}`);
+  }
+});
+
 test('serves land past the short line and away from the side walls', () => {
   for (const shot of ['serve', 'lob']) {
     const match = createMatch(OPPONENTS[0], () => 0);

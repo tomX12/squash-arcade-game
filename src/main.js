@@ -1,7 +1,7 @@
 // Game loop, screens and rewards.
 
 import {
-  BOT, STEP, WIN_SCORE, YOU, createMatch, isTieBreak, serve, starsFor, step, swing,
+  BOT, STEP, SWING_ANIM, SWING_WINDOW, WIN_SCORE, YOU, createMatch, isTieBreak, serve, starsFor, step, swing,
 } from './physics.js';
 import { createBrain, updateBot } from './bot.js';
 import { CLUBS, OPPONENTS } from './levels.js';
@@ -264,8 +264,13 @@ function drawTitle() {
   fillView(ctx, 'rgba(0,0,0,0.4)');
   drawText(ctx, 'RALLY', 90, 40, t.accent, { scale: 4, align: 'center', shadow: t.bg });
   drawText(ctx, 'RUSH', 90, 76, t.text, { scale: 4, align: 'center', shadow: t.bg });
-  const swinging = Math.floor(state.clock * 1.5) % 2 === 0 ? 0.1 : 0;
-  drawPlayer(ctx, { x: 2.1, y: 6.2, mx: 0, my: 0, run: 0, anim: swinging, facing: 1 }, yourKit());
+  // Raise the racket, wait, then play the stroke, every couple of seconds.
+  const beat = state.clock % 2;
+  const waiting = beat < SWING_WINDOW ? SWING_WINDOW - beat : 0;
+  const swinging = beat >= SWING_WINDOW && beat < SWING_WINDOW + SWING_ANIM ? SWING_WINDOW + SWING_ANIM - beat : 0;
+  drawPlayer(ctx, {
+    x: 2.1, y: 6.2, mx: 0, my: 0, run: 0, anim: swinging, window: waiting, facing: 1,
+  }, yourKit());
   drawPlayer(ctx, { x: 4.4, y: 5.4, mx: 0, my: 0, run: 0, anim: 0, facing: -1 }, OPPONENTS[state.levelIndex].kit);
   button(50, 232, 80, 26, 'PLAY', () => go('select'), { primary: true });
   button(50, 264, 80, 22, 'UNLOCKS', () => go('gallery'));

@@ -1,9 +1,9 @@
 // The camera sits high above the back wall, looking down the court at the front wall.
 // Walls stay vertical on screen, and everything shrinks with distance.
 
-import { COURT, SWING_ANIM } from './physics.js';
+import { COURT, SWING_ANIM, SWING_WINDOW } from './physics.js';
 import {
-  HAND, PLAYER_FRAMES, PLAYER_SIZE, drawSprite,
+  HAND, PLAYER_FRAMES, PLAYER_SIZE, SHOULDER, drawSprite,
 } from './sprites.js';
 
 // The layout is designed for W x H. The canvas grows past that to match the
@@ -35,8 +35,28 @@ const PLAYER_HEIGHT = 1.8;
 const WALL_TOP = 5.2;
 // A little larger than life in metres, so the strings still read at this resolution.
 const RACKET = {
-  length: 0.8, headLength: 0.36, headWidth: 0.3, grip: 0.2, rest: 0.5, swingFrom: -0.5, swingTo: 2.7,
+  length: 0.8, headLength: 0.36, headWidth: 0.3, grip: 0.2,
 };
+// Racket-side poses seen from behind: hand in sprite pixels, racket angle in radians clockwise from up.
+const POSE = {
+  rest: { x: HAND.rest.x, y: HAND.rest.y, angle: 0.5 },
+  ready: { x: 12, y: 3, angle: -0.35 },
+  contact: { x: 13.5, y: 8, angle: 1.75 },
+  through: { x: 9, y: 9, angle: 3.5 },
+  finish: { x: 4.5, y: 4, angle: 5.4 },
+};
+const RAISE_TIME = 0.07;
+// The stroke as fractions of SWING_ANIM: a quick whip to contact, a slower follow-through
+// over the far shoulder, a short hold, then the racket comes back over the head to rest.
+const STROKE = [
+  [0, POSE.ready],
+  [0.1, POSE.contact],
+  [0.3, POSE.through],
+  [0.5, POSE.finish],
+  [0.72, POSE.finish],
+  [1, { ...POSE.rest, angle: POSE.rest.angle + Math.PI * 2 }],
+];
+const ARM_WIDTH = 1.6;
 const RACKET_POINTS = 20;
 const STRING_GAP = 2;
 const GRIP_COLOR = '#20202a';
@@ -199,8 +219,42 @@ function playerSprite(frame, kit) {
 
 function frameFor(player) {
   if (player.anim > 0) return 'swing';
-  if (Math.hypot(player.mx, player.my) > 0.1) return Math.floor(player.run * 3.2) % 2 ? 'runA' : 'runB';
-  return 'idle';
+  let legs = 'idle';
+  if (Math.hypot(player.mx, player.my) > 0.1) legs = Math.floor(player.run * 3.2) % 2 ? 'runA' : 'runB';
+  if (player.window > 0) return `ready${legs[0].toUpperCase()}${legs.slice(1)}`;
+  return legs;
+}
+
+const smooth = (t) => t * t * (3 - 2 * t);
+
+function blend(a, b, t) {
+  const k = smooth(Math.max(0, Math.min(1, t)));
+  return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, angle: a.angle + (b.angle - a.angle) * k };
+}
+
+// Where the hand and racket are: resting, raised and waiting for the ball, or partway through a stroke.
+function poseFor(player) {
+  if (player.anim > 0) {
+    const t = 1 - Math.min(1, player.anim / SWING_ANIM);
+    const next = STROKE.findIndex(([at]) => at >= t);
+    if (next <= 0) return STROKE[0][1];
+    const [fromAt, from] = STROKE[next - 1];
+    const [toAt, to] = STROKE[next];
+    return blend(from, to, (t - fromAt) / (toAt - fromAt));
+  }
+  if (player.window > 0) return blend(POSE.rest, POSE.ready, (SWING_WINDOW - player.window) / RAISE_TIME);
+  return POSE.rest;
+}
+
+function drawArm(ctx, from, to, size, color) {
+  const steps = Math.ceil(Math.hypot(to.x - from.x, to.y - from.y));
+  ctx.fillStyle = color;
+  for (let i = 0; i <= steps; i++) {
+    const t = steps ? i / steps : 0;
+    const x = from.x + (to.x - from.x) * t;
+    const y = from.y + (to.y - from.y) * t;
+    ctx.fillRect(Math.round(x - size / 2), Math.round(y - size / 2), size, size);
+  }
 }
 
 function shadow(ctx, x, y, width, height) {
@@ -238,12 +292,6 @@ function drawRacket(ctx, hand, angle, scale, frame) {
   }
 }
 
-function racketAngle(player) {
-  if (player.anim <= 0) return RACKET.rest;
-  const progress = 1 - Math.min(1, player.anim / SWING_ANIM);
-  return RACKET.swingFrom + (RACKET.swingTo - RACKET.swingFrom) * progress;
-}
-
 export function drawPlayer(ctx, player, kit, marker) {
   const feet = project(player.x, player.y);
   const height = Math.round(PLAYER_HEIGHT * feet.scale);
@@ -255,7 +303,25 @@ export function drawPlayer(ctx, player, kit, marker) {
   }
   const left = Math.round(feet.x - width / 2);
   const top = Math.round(feet.y - height);
-  const sprite = playerSprite(frameFor(player), kit);
+  const frame = frameFor(player);
+  const sprite = playerSprite(frame, kit);
+  const pose = poseFor(player);
+  const toScreen = (p) => ({
+    x: feet.x + player.facing * (p.x / PLAYER_SIZE.w - 0.5) * width,
+    y: top + (p.y / PLAYER_SIZE.h) * height,
+  });
+  const hand = toScreen(pose);
+  const pixel = width / PLAYER_SIZE.w;
+  const drawArmAndRacket = () => {
+    // Idle and running frames already have the arm in the sprite.
+    if (frame.startsWith('ready') || frame === 'swing') {
+      drawArm(ctx, toScreen(SHOULDER), hand, Math.max(1, Math.round(pixel * ARM_WIDTH)), kit.skin ?? '#e0ac7e');
+    }
+    drawRacket(ctx, hand, pose.angle * player.facing, feet.scale, kit.shirt);
+  };
+  // On the follow-through the arm crosses in front of the body, out of the camera's sight.
+  const behind = pose.x < SHOULDER.x - 1;
+  if (behind) drawArmAndRacket();
   ctx.save();
   if (player.facing < 0) {
     ctx.translate(left * 2 + width, 0);
@@ -264,13 +330,7 @@ export function drawPlayer(ctx, player, kit, marker) {
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(sprite, left, top, width, height);
   ctx.restore();
-
-  const grip = player.anim > 0 ? HAND.swing : HAND.rest;
-  const hand = {
-    x: feet.x + player.facing * (grip.x / PLAYER_SIZE.w - 0.5) * width,
-    y: top + (grip.y / PLAYER_SIZE.h) * height,
-  };
-  drawRacket(ctx, hand, racketAngle(player) * player.facing, feet.scale, kit.shirt);
+  if (!behind) drawArmAndRacket();
 }
 
 export function drawBall(ctx, ball, trail, color) {
