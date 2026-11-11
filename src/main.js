@@ -540,17 +540,44 @@ bindInput(canvas, toLogical, {
 // Fill the whole screen on any device: the canvas takes the screen's shape and
 // the game layout stays centred inside it.
 function resize() {
-  const stage = canvas.parentElement.getBoundingClientRect();
-  if (!stage.width || !stage.height) return;
-  setViewAspect(stage.height / stage.width);
+  // The visual viewport is the area between any browser bars; the layout viewport can run underneath them.
+  const stage = canvas.parentElement;
+  const view = window.visualViewport ?? {
+    offsetLeft: 0, offsetTop: 0, width: innerWidth, height: innerHeight,
+  };
+  // Notches and gesture bars only need avoiding where a browser bar is not already covering them.
+  const inset = getComputedStyle(document.getElementById('insets'));
+  const covered = {
+    top: view.offsetTop,
+    bottom: innerHeight - view.offsetTop - view.height,
+    left: view.offsetLeft,
+    right: innerWidth - view.offsetLeft - view.width,
+  };
+  const pad = {};
+  for (const side of ['top', 'right', 'bottom', 'left']) {
+    pad[side] = Math.max(0, parseFloat(inset[`padding-${side}`]) - Math.max(0, covered[side]));
+  }
+  Object.assign(stage.style, {
+    left: `${view.offsetLeft}px`,
+    top: `${view.offsetTop}px`,
+    width: `${view.width}px`,
+    height: `${view.height}px`,
+    padding: `${pad.top}px ${pad.right}px ${pad.bottom}px ${pad.left}px`,
+  });
+  const width = view.width - pad.left - pad.right;
+  const height = view.height - pad.top - pad.bottom;
+  if (width <= 0 || height <= 0) return;
+  setViewAspect(height / width);
   canvas.width = VIEW.w;
   canvas.height = VIEW.h;
-  canvas.style.width = `${stage.width}px`;
-  canvas.style.height = `${stage.height}px`;
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
 }
 
 addEventListener('resize', resize);
 addEventListener('orientationchange', resize);
+window.visualViewport?.addEventListener('resize', resize);
+window.visualViewport?.addEventListener('scroll', resize);
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) pause();
 });
